@@ -102,6 +102,7 @@ body.exporting .no-print{display:none!important}
 const API = 'https://api.jsonbin.io/v3';
 const LS_STATE = 'mwb-poll-v4', LS_MASTER = 'mwb-jsonbin-master', LS_VOTER = 'mwb-voter-id';
 const SYNC_MS = 10000;
+const N_PRE = 10;   // pre-decided reason slots for poll 2b (live slots stay at 5)
 
 const store = {
   get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
@@ -154,12 +155,16 @@ async function createAccessKey(master){
 /* =========================================================================
    PARTICIPANT VIEW
    ========================================================================= */
+// Some QR scanners and chat apps re-encode '|' as %7C (and '=' as %3D) — accept both.
+// Any #poll… link that cannot be parsed returns { bad:true } so the phone shows an error, never the facilitator view.
 function parseHash(){
-  const h = location.hash || '';
-  if (!h.startsWith('#poll=')) return null;
-  const raw = h.slice(6), i = raw.indexOf('|');
-  if (i < 1) return null;
-  return { binId: raw.slice(0,i), key: decodeURIComponent(raw.slice(i+1)) };
+  const h = (location.hash || '').slice(1).replace(/%7C/gi, '|').replace(/%3D/gi, '=');
+  if (!/^poll/i.test(h)) return null;
+  if (!/^poll=/i.test(h)) return { bad:true };
+  const raw = h.slice(5), i = raw.indexOf('|');
+  if (i < 1 || i === raw.length - 1) return { bad:true };
+  try { return { binId: raw.slice(0,i), key: decodeURIComponent(raw.slice(i+1)) }; }
+  catch(e){ return { bad:true }; }
 }
 function voterId(){
   if (window.__vid) return window.__vid;
@@ -171,8 +176,11 @@ function voterId(){
 
 const P = { rec:null, status:'loading', draft:null, msg:'', had:false };
 
+const BAD_LINK = 'This poll link is incomplete. Scan the QR code again with the phone camera, or ask the facilitator for the link.';
 async function pLoad(){
-  const { binId, key } = parseHash();
+  const ph = parseHash();
+  if (!ph || ph.bad){ P.status = 'error'; P.msg = BAD_LINK; pRender(); return; }
+  const { binId, key } = ph;
   P.status = 'loading'; pRender();
   try {
     const rec = await readBin(binId, { access:key });
@@ -342,7 +350,7 @@ function DEFAULT(){
     title:'Reflection on the Must-Win Battles',
     purpose:'Check that everyone is clear on their role and why we have these Must-Win Battles, and gauge how realistic the planned timeline feels.',
     tab:'p1', pkey:null, pkeyName:null, bins:[],
-    pre: Array.from({length:8}, () => ({ id:uid(), text:'' })),   // 8 pre-decided reasons
+    pre: Array.from({length:N_PRE}, () => ({ id:uid(), text:'' })),   // pre-decided reasons
     live: [],                                                     // up to 5 added live in the room
     polls:{
       p1:{ ...basePoll(), type:'scale', num:'1', title:'Clarity and expectations',
@@ -359,7 +367,15 @@ function DEFAULT(){
   };
 }
 let S = (() => {
-  try { const s = JSON.parse(store.get(LS_STATE)); if (s && s.v === 4) return s; } catch(e){}
+  try {
+    const s = JSON.parse(store.get(LS_STATE));
+    if (s && s.v === 4){
+      // Saves from versions with fewer pre-decided slots get empty slots added; texts are kept.
+      s.pre = Array.isArray(s.pre) ? s.pre : [];
+      while (s.pre.length < N_PRE) s.pre.push({ id:uid(), text:'' });
+      return s;
+    }
+  } catch(e){}
   return DEFAULT();
 })();
 let master = store.get(LS_MASTER) || '';
@@ -484,9 +500,9 @@ function reasonEditor(p){
   let h = `<div class="grid2" style="margin-top:6px"><div>
     <label class="f">Pre-decided reasons (fill in before the session)</label>`;
   S.pre.forEach((x,i) => { h += `<div class="li"><span class="n">${i+1}</span><input type="text" maxlength="200" data-bind="pre.${i}.text" value="${esc(x.text)}" placeholder="Pre-decided reason ${i+1}"></div>`; });
-  h += `<details class="no-print" style="margin-top:6px"><summary class="small" style="cursor:pointer">Paste all 8 at once (one per line)</summary>
+  h += `<details class="no-print" style="margin-top:6px"><summary class="small" style="cursor:pointer">Paste all ${S.pre.length} at once (one per line)</summary>
     <textarea id="bulk" rows="6" style="margin-top:6px" placeholder="One reason per line"></textarea>
-    <button class="btn sec" data-act="bulk" style="margin-top:6px">Fill the 8 slots</button></details></div><div>
+    <button class="btn sec" data-act="bulk" style="margin-top:6px">Fill the ${S.pre.length} slots</button></details></div><div>
     <label class="f">Added live in the room (up to 5)</label>`;
   S.live.forEach((x,i) => { h += `<div class="li"><span class="n">${S.pre.length+i+1}</span><input type="text" maxlength="200" data-bind="live.${i}.text" value="${esc(x.text)}" placeholder="New reason from the room">
     <button class="btn ghost no-print" data-act="rmlive" data-i="${i}" aria-label="Remove">✕</button></div>`; });
@@ -763,7 +779,8 @@ function fBind(){
 
 /* ---------------- boot ---------------- */
 window.addEventListener('hashchange', () => location.reload());
-if (parseHash()){ pBind(); pLoad(); }
+const PH = parseHash();
+if (PH){ pBind(); pLoad(); }
 else { if (!master) S.tab = 'setup'; fBind(); render(); }
 </script>
 </body>
