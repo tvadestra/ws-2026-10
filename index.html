@@ -637,7 +637,19 @@ async function runConnectionTest(){
       else tlog('✓ Participant key present (' + (S.pkeyName || 'created') + ')');
       if (S.pkey === master) throw new Error('Participant key equals the Master Key — do not start polls. Forget it and create a new one.');
       tlog('✓ Participant key differs from the Master Key');
-      if (S.pkey.startsWith('$2a$')) tlog('! Participant key starts with $2a$ — check in jsonbin → API Keys that it is an Access Key, not a Master Key');
+      // Ask jsonbin which access keys exist (GET /v3/a, Master Key only) and confirm ours is one of them.
+      try {
+        const keys = await api('GET', '/a', { auth:{master} });
+        if (!Array.isArray(keys)) tlog('! Could not read the access-key list (unexpected response) — check the API Keys page in jsonbin');
+        else {
+          tlog('✓ Account has ' + keys.length + ' access key(s): ' + (keys.map(k => (k.metadata && k.metadata.name) || '?').join(', ') || '–'));
+          const mine = keys.find(k => k.accessKey === S.pkey);
+          if (!mine) throw new Error('Participant key is not in the account\'s access-key list — click Forget next to it and run the test again');
+          const p = (mine.keyPermissions && mine.keyPermissions.bins) || {};
+          tlog('✓ Participant key is a jsonbin access key (' + ((mine.metadata && mine.metadata.name) || 'unnamed') + ')');
+          tlog(p.read && p.update && !p.create && !p.delete ? '✓ Permissions: read + update only' : '✗ Permissions are not read + update only: ' + JSON.stringify(p));
+        }
+      } catch(e){ if (/not in the account/.test(e.message)) throw e; tlog('! Could not list access keys (' + e.message + ') — check the API Keys page in jsonbin'); }
       const j = await api('POST', '/b', { auth:{master}, body:{ pollType:'test', open:true, votes:{} }, headers:{ 'X-Bin-Private':'true', 'X-Bin-Name':'mwb-connection-test' } });
       bin = j && j.metadata && j.metadata.id;
       if (!bin) throw new Error('jsonbin did not return a bin id');
